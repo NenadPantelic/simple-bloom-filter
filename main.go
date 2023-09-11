@@ -3,45 +3,81 @@ package main
 import (
 	"fmt"
 	"hash"
-	"time"
+	"math/rand"
 
 	"github.com/google/uuid"
 	"github.com/spaolacci/murmur3"
 )
 
 // https://en.wikipedia.org/wiki/MurmurHash
-var murmurHasher hash.Hash32
+var hashFunctions []hash.Hash32
 
 func init() {
-	murmurHasher = murmur3.New32WithSeed(uint32(time.Now().Unix()))
+	// hashFunctions = []hash.Hash32{
+	// 	murmur3.New32WithSeed(uint32(11)),
+	// 	murmur3.New32WithSeed(uint32(4214315325)),
+	// 	murmur3.New32WithSeed(uint32(442343243)),
+	// 	murmur3.New32WithSeed(uint32(87988798)),
+	// 	murmur3.New32WithSeed(uint32(768797855)),
+	// 	murmur3.New32WithSeed(uint32(465765768)),
+	// 	murmur3.New32WithSeed(uint32(889807453)),
+	// 	murmur3.New32WithSeed(uint32(456363)),
+	// 	murmur3.New32WithSeed(uint32(44353)),
+	// }
+
+	hashFunctions = make([]hash.Hash32, 0)
+	for i := 0; i < 100; i++ {
+		hashFunctions = append(hashFunctions, murmur3.New32WithSeed(rand.Uint32()))
+	}
 }
 
 type BloomFilter struct {
-	filter []bool
+	filter []uint8
 	size   int32
 }
 
-func murmurhash(key string, size int32) int32 {
-	murmurHasher.Write([]byte(key))
-	result := murmurHasher.Sum32() % uint32(size)
-	murmurHasher.Reset()
+func murmurhash(key string, size int32, hashFunctionsIdx int) int32 {
+	hashFunctions[hashFunctionsIdx].Write([]byte(key))
+	result := hashFunctions[hashFunctionsIdx].Sum32() % uint32(size)
+	hashFunctions[hashFunctionsIdx].Reset()
 	return int32(result)
 }
 
 func NewBloomFilter(size int32) *BloomFilter {
 	return &BloomFilter{
-		filter: make([]bool, size),
+		filter: make([]uint8, size),
 		size:   size,
 	}
 }
 
-func (b *BloomFilter) Add(key string) {
-	idx := murmurhash(key, b.size)
-	b.filter[idx] = true
+func (b *BloomFilter) Add(key string, numOfHashFunctions int) {
+	for i := 0; i <= numOfHashFunctions; i++ {
+		idx := murmurhash(key, b.size, numOfHashFunctions)
+		// xth byte - idx / 8
+		byteIndex := idx / 8
+		// yth bit in that byte - idx % 8
+		bitPosition := idx % 8
+		b.filter[byteIndex] = b.filter[byteIndex] | (1 << bitPosition)
+	}
 }
 
-func (b *BloomFilter) Exists(key string) bool {
-	return b.filter[murmurhash(key, b.size)]
+func (b *BloomFilter) Exists(key string, numOfFunctions int) bool {
+
+	for i := 0; i < numOfFunctions; i++ {
+		idx := murmurhash(key, b.size, i)
+		// xth byte - idx / 8
+		byteIndex := idx / 8
+		// yth bit in that byte - idx % 8
+		bitPosition := idx % 8
+
+		exist := b.filter[byteIndex]&(1<<bitPosition) == 1
+		if !exist {
+			return false
+		}
+
+	}
+
+	return true
 }
 
 func (b *BloomFilter) Print() {
@@ -53,7 +89,7 @@ func main() {
 	datasetExists := make(map[string]bool)
 	datasetNotExist := make(map[string]bool)
 
-	numOfElements := 5000
+	numOfElements := 8000
 
 	for i := 0; i < numOfElements/2; i++ {
 		u := uuid.New().String()
@@ -67,17 +103,17 @@ func main() {
 		datasetNotExist[u] = true
 	}
 
-	for j := 100; j <= 50_000; j += 100 {
-		bloom := NewBloomFilter(int32(j))
+	for i := 0; i < len(hashFunctions); i++ {
+		bloom := NewBloomFilter(int32(10_00))
 
 		for key, _ := range datasetExists {
-			bloom.Add(key)
+			bloom.Add(key, i)
 		}
 
 		falsePositive := 0
 
 		for _, key := range dataset {
-			exists := bloom.Exists(key)
+			exists := bloom.Exists(key, i)
 			_, ok := datasetNotExist[key]
 
 			if exists && ok {
